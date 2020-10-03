@@ -23,6 +23,9 @@ const SERVO_OFF_PERIOD: u32 = 320_000; // = 8000 x 40
 // We wait up to 30 seconds after light off.
 const LIGHT_OFF_PERIOD: u32 = 24_000_000; // = 8_000_000 x 30
 
+const ON_ANGLE: u16 = 6;
+const OFF_ANGLE: u16 = 3;
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources<P> {
@@ -93,6 +96,7 @@ const APP: () = {
     }
 
     #[task(binds = EXTI9_5, priority = 1, resources = [led, int_pin, servo, last_on, is_on], schedule = [turn_servo_off, turn_light_off])]
+    #[allow(unused_must_use)] // <= We must not call unwrap() on them. They become Err().
     fn change(cx: change::Context) {
         // if we don't clear this bit, the ISR would trigger indefinitely
         cx.resources.int_pin.clear_interrupt_pending_bit();
@@ -106,8 +110,7 @@ const APP: () = {
                 cx.resources.led.set_low().unwrap();
                 cx.resources.servo.enable();
                 let max = cx.resources.servo.get_max_duty();
-                cx.resources.servo.set_duty((max / 100) * 6);
-                // We must not call unwrap() on them. They become Err().
+                cx.resources.servo.set_duty((max / 100) * ON_ANGLE);
                 cx.schedule.turn_servo_off(cx.start + SERVO_OFF_PERIOD.cycles());
                 *cx.resources.is_on = true;
             }
@@ -129,7 +132,7 @@ const APP: () = {
         cx.resources.led.set_low().unwrap();
         cx.resources.servo.enable();
         let max = cx.resources.servo.get_max_duty();
-        cx.resources.servo.set_duty((max / 100) * 4);
+        cx.resources.servo.set_duty((max / 100) * OFF_ANGLE);
         cx.schedule.turn_servo_off(cx.scheduled + SERVO_OFF_PERIOD.cycles()).unwrap();
         *cx.resources.is_on = false;
     }
