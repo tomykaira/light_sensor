@@ -118,6 +118,7 @@ const APP: () = {
     }
 
     #[task(resources=[servo, led, is_on, last_on], schedule = [turn_servo_off, turn_light_off])]
+    #[allow(unused_must_use)] // <= We must not call unwrap() on them. They become Err().
     fn turn_light_off(cx: turn_light_off::Context) {
         if !*cx.resources.is_on {
             return
