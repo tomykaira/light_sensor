@@ -31,6 +31,19 @@ cargo run --release
 
 will start GDB session and stop before the start of program.
 
+If it still does not work, run this magic code. I do not know why, but it is likely to start working.
+
+```
+st-flash read d 0x8000130 0xf88
+```
+
+These commands may also help.
+
+```
+(ocd) flash probe 0
+(ocd) stm32f1x unlock 0
+```
+
 # Hardware
 
 Current setup:

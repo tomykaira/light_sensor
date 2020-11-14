@@ -3,8 +3,9 @@
 
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 // you can put a breakpoint on `rust_begin_unwind` to catch panics
-use panic_semihosting as _;
+use cortex_m::peripheral::DWT;
 use rtic::app;
+use rtic::cyccnt::U32Ext as _;
 use stm32f1xx_hal::gpio::gpioa::PA7;
 use stm32f1xx_hal::gpio::{Edge, Floating, Input};
 use stm32f1xx_hal::pwm::{PwmChannel, C1};
@@ -14,14 +15,19 @@ use stm32f1xx_hal::{
     pac::TIM2,
     prelude::*,
 };
-use rtic::cyccnt::{U32Ext as _, Instant};
-use cortex_m::peripheral::DWT;
+
+use panic_halt as _;
+
+// use panic_semihosting as _;
+// use cortex_m_semihosting::hprintln;
 
 // Standard clock of bluepill is 8MHz.
 // Because the servo is 50 Hz, we set 40 ms (2 PWM signals).
 const SERVO_OFF_PERIOD: u32 = 320_000; // = 8000 x 40
-// We wait up to 30 seconds after light off.
-const LIGHT_OFF_PERIOD: u32 = 24_000_000; // = 8_000_000 x 30
+                                       // Bluepill clock speed is 8MHz.
+const CLOCK_SPEED: u32 = 8_000_000; // 8 MHz
+                                    // We wait at least this seconds to turn light off.
+const LIGHT_OFF_SEC: u16 = 60;
 
 const ON_ANGLE: u16 = 6;
 const OFF_ANGLE: u16 = 3;
@@ -32,12 +38,11 @@ const APP: () = {
         led: PC13<Output<PushPull>>,
         int_pin: PA7<Input<Floating>>,
         servo: PwmChannel<TIM2, C1>,
-        last_on: Instant,
-        #[init(false)]
-        is_on: bool,
+        #[init(0)]
+        seconds_to_off: u16,
     }
 
-    #[init(schedule = [])]
+    #[init(schedule = [tick_second])]
     fn init(mut cx: init::Context) -> init::LateResources {
         cx.core.DCB.enable_trace();
         DWT::unlock();
@@ -57,8 +62,11 @@ const APP: () = {
 
         let c1 = gpioa.pa0.into_alternate_push_pull(&mut gpioa.crl);
         let pins = c1;
-        let pwm = Timer::tim2(cx.device.TIM2, &clocks, &mut rcc.apb1)
-            .pwm::<Tim2NoRemap, _, _, _>(pins, &mut afio.mapr, 50.hz());
+        let pwm = Timer::tim2(cx.device.TIM2, &clocks, &mut rcc.apb1).pwm::<Tim2NoRemap, _, _, _>(
+            pins,
+            &mut afio.mapr,
+            50.hz(),
+        );
         let servo = pwm.split();
 
         // Configure gpio C pin 13 as a push-pull output. The `crh` register is passed to the
@@ -78,7 +86,6 @@ const APP: () = {
             led,
             int_pin,
             servo,
-            last_on: cx.start,
         }
     }
 
@@ -87,15 +94,16 @@ const APP: () = {
     // https://rtfm.rs/0.5/book/en/by-example/app.html#idle
     // > When no idle function is declared, the runtime sets the SLEEPONEXIT bit and then
     // > sends the microcontroller to sleep after running init.
-    #[idle(schedule = [turn_light_off])]
+    #[idle(spawn=[tick_second, turn_light_off])]
     fn idle(cx: idle::Context) -> ! {
-        cx.schedule.turn_light_off(Instant::now() + SERVO_OFF_PERIOD.cycles()).unwrap();
+        cx.spawn.tick_second().unwrap();
+        cx.spawn.turn_light_off().unwrap();
         loop {
             cortex_m::asm::wfi();
         }
     }
 
-    #[task(binds = EXTI9_5, priority = 1, resources = [led, int_pin, servo, last_on, is_on], schedule = [turn_servo_off, turn_light_off])]
+    #[task(binds = EXTI9_5, priority = 1, resources = [led, int_pin, servo, seconds_to_off], schedule = [turn_servo_off, tick_second])]
     #[allow(unused_must_use)] // <= We must not call unwrap() on them. They become Err().
     fn change(cx: change::Context) {
         // if we don't clear this bit, the ISR would trigger indefinitely
@@ -103,39 +111,45 @@ const APP: () = {
 
         // Active low
         if cx.resources.int_pin.is_low().unwrap() {
-            *cx.resources.last_on = cx.start;
-            cx.schedule.turn_light_off(cx.start + LIGHT_OFF_PERIOD.cycles());
-
-            if !*cx.resources.is_on {
+            if *cx.resources.seconds_to_off == 0 {
                 cx.resources.led.set_low().unwrap();
                 cx.resources.servo.enable();
                 let max = cx.resources.servo.get_max_duty();
                 cx.resources.servo.set_duty((max / 100) * ON_ANGLE);
-                cx.schedule.turn_servo_off(cx.start + SERVO_OFF_PERIOD.cycles());
-                *cx.resources.is_on = true;
+                cx.schedule
+                    .turn_servo_off(cx.start + SERVO_OFF_PERIOD.cycles());
+
+                cx.schedule
+                    .tick_second(cx.start + CLOCK_SPEED.cycles())
+                    .unwrap();
             }
+
+            *cx.resources.seconds_to_off = LIGHT_OFF_SEC;
         }
     }
 
-    #[task(resources=[servo, led, is_on, last_on], schedule = [turn_servo_off, turn_light_off])]
+    #[task(resources = [seconds_to_off], schedule = [tick_second], spawn=[turn_light_off])]
+    fn tick_second(cx: tick_second::Context) {
+        if *cx.resources.seconds_to_off == 0 {
+            cx.spawn.turn_light_off().unwrap();
+        } else {
+            *cx.resources.seconds_to_off -= 1;
+            cx.schedule
+                .tick_second(cx.scheduled + CLOCK_SPEED.cycles())
+                .unwrap();
+        }
+    }
+
+    #[task(resources=[servo, led, seconds_to_off], schedule = [turn_servo_off, turn_light_off])]
     #[allow(unused_must_use)] // <= We must not call unwrap() on them. They become Err().
     fn turn_light_off(cx: turn_light_off::Context) {
-        if !*cx.resources.is_on {
-            return
-        }
-
-        if cx.scheduled - *cx.resources.last_on < (LIGHT_OFF_PERIOD / 10 * 9).cycles() {
-            // wait next tick
-            cx.schedule.turn_light_off(cx.scheduled + LIGHT_OFF_PERIOD.cycles());
-            return;
-        }
-
         cx.resources.led.set_low().unwrap();
         cx.resources.servo.enable();
         let max = cx.resources.servo.get_max_duty();
         cx.resources.servo.set_duty((max / 100) * OFF_ANGLE);
-        cx.schedule.turn_servo_off(cx.scheduled + SERVO_OFF_PERIOD.cycles()).unwrap();
-        *cx.resources.is_on = false;
+        cx.schedule
+            .turn_servo_off(cx.scheduled + SERVO_OFF_PERIOD.cycles());
+        *cx.resources.seconds_to_off = 0;
     }
 
     #[task(resources=[servo, led])]
