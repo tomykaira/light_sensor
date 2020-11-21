@@ -16,7 +16,7 @@ bat_w = 54;
 bat_d = 50;
 bat_h = 12.5;
 
-margin = 0.5;
+margin = 2;
 d_margin = 0.3;
 
 bread_d = 45 + margin;
@@ -201,25 +201,45 @@ module servo() {
 
 servo_w_offset = width / 2 - 5.9;
 servo_h_offset = depth - 22.7 - wallThickness;
-
 module bottom_content() {
 	difference() {
-		// outline
-		cube([width, depth, height]);
-		// content area
-		translate([wallThickness, wallThickness, wallThickness]) {
-			difference() {
-				cube([width - (wallThickness * 2), depth - (wallThickness * 2), height]);
-				// separators
-				translate([(width - bat_w) / 2 + inner_wall_thickness / 2, inner_wall_thickness, 0]) {
-					separator(bat_w, bat_d);
+		union() {
+			cube([width, wallThickness, height]);
+			translate([0, depth - wallThickness, 0])
+				cube([width, wallThickness, height]);
+
+			cube([wallThickness, depth, height]);
+			translate([width - wallThickness, 0, 0])
+				cube([wallThickness, depth, height]);
+
+			difference () {
+				cube([width, depth, wallThickness]);
+				translate([0, -depth/1.41, 0])
+					mesh([0 : width / mesh_pitch * 3], [0 : depth / mesh_pitch * 3]);
+			}
+
+			// content area
+			translate([wallThickness, wallThickness, wallThickness]) {
+				union() {
+					// separators
+					translate([(width - bat_w) / 2 + inner_wall_thickness / 2, inner_wall_thickness, 0]) {
+						separator(bat_w, bat_d);
+					}
+					translate([(width - bread_w) / 2 + inner_wall_thickness / 2, inner_wall_thickness * 2 + bat_d, 0]) {
+						separator(bread_w, bread_d);
+					}
+					translate([servo_w_offset, servo_h_offset - margin / 2, 0]) {
+						separator(22.5, 22.7);
+					}
 				}
-				translate([(width - bread_w) / 2 + inner_wall_thickness / 2, inner_wall_thickness * 2 + bat_d, 0]) {
-					separator(bread_w, bread_d);
-				}
-				translate([servo_w_offset, servo_h_offset - margin / 2, 0]) {
-					separator(22.5, 22.7);
-				}
+			}
+
+			// TOOD verify X position
+			translate([(11.55), depth, 0]) {
+				cube([13.25, mount_d ,height]);
+			}
+			translate([((11.55 + 13.25 + 43)), depth, 0]) {
+				cube([13.25, mount_d ,height]);
 			}
 		}
 		// servo window
@@ -234,6 +254,7 @@ module bottom_content() {
 		}
 	}
 }
+
 
 module separator(w, d) {
 	translate([-inner_wall_offset, -inner_wall_offset, 0]) {
@@ -254,6 +275,18 @@ module separator(w, d) {
 	}
 }
 
+mesh_pitch = 5;
+mesh_hole_size = 3;
+module mesh(x_range, y_range) {
+	for ( i = y_range )
+	{
+		for (j = x_range ) {
+			rotate(45, [0, 0, 1])
+				translate([j * mesh_pitch, i * mesh_pitch, 0])
+				cube(mesh_hole_size, mesh_hole_size, wallThickness);
+		}
+	}
+}
 
 module top_content() {
 	union() {
@@ -270,12 +303,5 @@ module top_content() {
 				cube([sensor_sensor_w, sensor_sensor_d, wallThickness]);
 			}
 		}
-		translate([fingerLength + (width - 11.55- 13.25), depth/2, 0]) {
-			cube([13.25, mount_d ,height]);
-		}
-		translate([fingerLength + (width - (11.55 + 13.25 + 43)- 13.25), depth/2, 0]) {
-			cube([13.25, mount_d ,height]);
-		}
-
 	}
 }
